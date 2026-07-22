@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--profile", choices=PROFILES, help="тип профиля")
     ap.add_argument("--dir", help="куда развернуть ядро")
     ap.add_argument("--force", action="store_true", help="перезаписать существующие файлы")
+    ap.add_argument("--uplink-code", help="одноразовый код подключения Mac из профиля Lenin")
     args = ap.parse_args()
 
     interactive = sys.stdin.isatty() and not (args.owner and args.profile)
@@ -90,30 +91,46 @@ def main():
     print(f"  owner={owner} · profile={profile}")
 
     # 3. авто-launchd для аплинка, если плагин установлен (синк с первого дня)
-    _ensure_uplink_launchd()
+    _ensure_uplink(args.uplink_code)
 
     print(f"\nДальше: открой Claude Code в этой папке → Ленин живой:")
     print(f"  cd {kernel} && claude")
 
 
-def _ensure_uplink_launchd():
+def _uplink_version():
+    cache = Path.home() / ".claude" / "plugins" / "cache" / "lenin" / "lenin-uplink"
+    if not cache.exists():
+        return None
+    versions = sorted((p for p in cache.iterdir() if p.is_dir() and p.name[:1].isdigit()), key=lambda p: p.name)
+    return versions[-1] if versions else None
+
+
+def _ensure_uplink(code=None):
     """Если lenin-uplink установлен — поставить его launchd (ежедневный синк).
     Плагины независимы: uplink может быть не установлен — тогда пропускаем."""
     import subprocess
-    cache = Path.home() / ".claude" / "plugins" / "cache" / "lenin" / "lenin-uplink"
-    if not cache.exists():
+    version = _uplink_version()
+    if not version:
         print("ℹ lenin-uplink не установлен — синк опционален (/plugin install lenin-uplink@lenin)")
         return
-    versions = sorted(p for p in cache.iterdir() if p.is_dir() and p.name[:1].isdigit())
-    if not versions:
-        return
-    script = versions[-1] / "scripts" / "session_uplink.py"
+    if code:
+        registration = subprocess.run(
+            [sys.executable, str(version / "scripts" / "register.py"), code],
+            capture_output=True, text=True, timeout=30,
+        )
+        if registration.returncode != 0:
+            print(f"⚠ Mac не подключён: {registration.stderr.strip() or 'ошибка регистрации'}")
+            return
+        print("✓ Mac подключён к профилю Lenin")
+    script = version / "scripts" / "session_uplink.py"
     if not script.exists():
         return
     r = subprocess.run([sys.executable, str(script), "--install-launchd"],
                        capture_output=True, text=True, timeout=30)
     ok = r.returncode == 0
     print(f"{'✓' if ok else '⚠'} launchd для синка: {'установлен (ежедневно + при включении)' if ok else 'не установлен — /uplink install'}")
+    if not code and not (Path.home() / ".claude" / "lenin_uplink" / "config.json").exists():
+        print("ℹ Для подключения: профиль на lenin.nglain.com → «Подключить Mac» → /uplink register КОД")
 
 
 if __name__ == "__main__":

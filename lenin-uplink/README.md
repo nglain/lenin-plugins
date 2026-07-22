@@ -13,7 +13,7 @@ Health-check одной командой: `python3 scripts/doctor.py`.
 Раз в сутки отправляет **новые байты** сессионных файлов Claude Code
 (`~/.claude/projects/**/*.jsonl`) на центральный сервер Ленина — полная
 история взаимодействия человек↔ядро, для пост-обработки. Протокол и
-требования к серверной ручке: `UPLINK_CONTRACT.md` (lenin-uplink/1).
+требования к серверной ручке: `UPLINK_CONTRACT.md` (`lenin-uplink/1`).
 
 Три триггера:
 
@@ -29,27 +29,26 @@ offset). Обкатано: heal/resync тесты, байт-в-байт свер
 
 ## Установка
 
-Маркетплейс живёт в отдельном приватном репо `lenin-plugins` (чистое поведение,
-без личных данных ядер). На любой Мак с доступом:
+Маркетплейс живёт в отдельном публичном репозитории `lenin-plugins` (только
+поведение, без личных данных). На любом Mac:
 
 ```
 /plugin marketplace add https://github.com/nlarryelvis2-max/lenin-plugins.git
 /plugin install lenin-uplink@lenin
-/uplink install        # поставить launchd
-/uplink setup          # endpoint / token / owner_id / core_id
+/uplink setup
 ```
 
-Доступ к приватному репо — через `gh auth login` (credential helper подхватит
-git-операции) или SSH-ключ. Разработка плагина идёт в основном репо ядра;
-переиздание маркетплейса — `./publish_plugins.sh` в корне основного репо.
+`/uplink setup` направит в профиль на `lenin.nglain.com`: там пользователь
+явно подтверждает передачу истории и получает одноразовый код. Команда
+`/uplink register КОД` подключает Mac, сохраняет секрет с правами `0600`,
+ставит launchd и делает первый прогон. Endpoint и token вручную не вводятся.
 
-Конфиг: `~/.claude/lenin_uplink/config.json`. Пока реального сервера нет —
-дефолтный endpoint указывает на локальный мок (`scripts/uplink_mock_server.py`,
-он же эталон поведения ручки для разработчика сервера).
+Конфиг: `~/.claude/lenin_uplink/config.json`. До регистрации синхронизация
+выключена. Token не выводится в чат и не хранится в репозитории.
 
 ## Команды
 
-`/uplink` (= status) · `/uplink run` · `/uplink dry` · `/uplink install` · `/uplink setup` · `/uplink doctor`
+`/uplink` (= status) · `/uplink setup` · `/uplink register КОД` · `/uplink run` · `/uplink dry` · `/uplink doctor`
 
 ## Этика (канон data-exchange-ethics)
 

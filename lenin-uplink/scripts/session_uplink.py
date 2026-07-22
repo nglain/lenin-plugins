@@ -9,12 +9,13 @@
 Инкрементальность: манифест per-file byte-offset (паттерн telegram_ingest).
 Шлём только байты после offset, только до последнего полного '\n'.
 Повторный запуск ничего не задваивает — state двигается только после 200 OK.
+Если новых строк нет, отправляется пустой heartbeat с текущей версией установки.
 
 Контракт ручки (v1, согласован 2026-07-17):
   POST {endpoint}   (default /v1/uplink/sessions)
   Headers: Authorization: Bearer <token> · X-Core-Id · X-Machine-Id
            Content-Type: application/json · Content-Encoding: gzip
-  Body (gzip JSON): {machine_id, core_id, sent_at,
+  Body (gzip JSON): {machine_id, core_id, lenin_version, sent_at,
                      chunks: [{path, offset, length, sha256, b64}]}
   Ответ 200: {"accepted": true, "files": {path: next_offset}}
 
@@ -52,17 +53,20 @@ CONFIG_F = BASE / "config.json"
 LOG_F = BASE / "uplink.log"
 LOCK_F = BASE / ".lock"
 PLIST = HOME / "Library" / "LaunchAgents" / "com.lenin.session-uplink.plist"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_CONFIG = {
-    "enabled": True,
-    "endpoint": "http://127.0.0.1:8787/v1/uplink/sessions",
-    "token": "dev-mock-token",
-    "owner_id": "owner",
-    "core_id": "lenin-core",
+    "enabled": False,
+    "endpoint": "https://lenin.nglain.com/v1/uplink/sessions",
+    "token": "",
+    "owner_id": "",
+    "core_id": "",
+    "protocol": "teamon-uplink/1",
     "max_mb_per_run": 200,
     "max_chunk_mb": 8,
     "max_batch_mb": 24,
 }
+LENIN_VERSION = "uplink 1.1.0"
 
 
 def now_iso() -> str:
@@ -86,7 +90,9 @@ def save_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.chmod(tmp, 0o600)
     tmp.replace(path)
+    os.chmod(path, 0o600)
 
 
 def load_config() -> dict:
@@ -106,6 +112,40 @@ def machine_id() -> str:
     except Exception:
         pass
     return platform.node() or "unknown-mac"
+
+
+def plugin_version(plugin: str) -> str:
+    if plugin == "uplink":
+        roots = [PLUGIN_ROOT]
+    else:
+        registry = load_json(HOME / ".claude" / "plugins" / "installed_plugins.json", {})
+        installs = registry.get("plugins", {}).get(f"lenin-{plugin}@lenin", [])
+        if installs:
+            current = max(installs, key=lambda item: str(item.get("lastUpdated") or item.get("installedAt") or ""))
+            version = str(current.get("version", "")).strip()
+            if version:
+                return version
+        cache = HOME / ".claude" / "plugins" / "cache" / "lenin" / f"lenin-{plugin}"
+        roots = sorted(
+            (path for path in cache.glob("*") if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    for root in roots:
+        manifest = load_json(root / ".claude-plugin" / "plugin.json", {})
+        version = str(manifest.get("version", "")).strip()
+        if version:
+            return version
+    return ""
+
+
+def lenin_version() -> str:
+    versions = [
+        f"core {version}" for version in [plugin_version("core")] if version
+    ] + [
+        f"uplink {version}" for version in [plugin_version("uplink")] if version
+    ]
+    return " / ".join(versions)
 
 
 def scan_pending(state: dict, max_chunk: int, only: str | None = None) -> list[dict]:
@@ -148,10 +188,12 @@ def scan_pending(state: dict, max_chunk: int, only: str | None = None) -> list[d
 
 def post_batch(cfg: dict, mid: str, batch: list[dict]) -> dict:
     body = {
-        "proto": "lenin-uplink/1",
+        "proto": cfg.get("protocol", "teamon-uplink/1"),
         "owner_id": cfg.get("owner_id", "unknown"),
         "machine_id": mid,
         "core_id": cfg["core_id"],
+        "lenin_version": LENIN_VERSION,
+        "lenin_version": lenin_version(),
         "sent_at": now_iso(),
         "chunks": [{k: v for k, v in c.items() if not k.startswith("_")} for c in batch],
     }
@@ -187,17 +229,21 @@ def run(dry: bool, max_mb: float | None, only: str | None = None) -> int:
     while total_sent < run_cap:
         pending = scan_pending(state, max_chunk, only)
         pending = [c for c in pending if c["_raw_len"] > 0]
+        heartbeat = not pending and total_files == 0 and not dry
         if not pending:
-            break
-        batch, batch_bytes = [], 0
-        for c in pending:
-            if batch and batch_bytes + c["_raw_len"] > batch_cap:
+            if not heartbeat:
                 break
-            if total_sent + batch_bytes + c["_raw_len"] > run_cap and batch:
-                break
-            batch.append(c)
-            batch_bytes += c["_raw_len"]
-        if not batch:
+            batch, batch_bytes = [], 0
+        else:
+            batch, batch_bytes = [], 0
+            for c in pending:
+                if batch and batch_bytes + c["_raw_len"] > batch_cap:
+                    break
+                if total_sent + batch_bytes + c["_raw_len"] > run_cap and batch:
+                    break
+                batch.append(c)
+                batch_bytes += c["_raw_len"]
+        if not batch and not heartbeat:
             break
         if dry:
             for c in batch:
@@ -208,6 +254,19 @@ def run(dry: bool, max_mb: float | None, only: str | None = None) -> int:
             break
         try:
             resp = post_batch(cfg, mid, batch)
+        except urllib.error.HTTPError as e:
+            e.close()
+            if e.code == 403:
+                cfg["enabled"] = False
+                save_json(CONFIG_F, cfg)
+                log("DISABLED server revoked access (HTTP 403)")
+                print("uplink: доступ отозван; синхронизация отключена. Подключите Mac заново в профиле Lenin.")
+                save_json(STATE_F, state)
+                return 1
+            log(f"FAIL post HTTP {e.code}")
+            print(f"uplink: сервер ответил HTTP {e.code}; state не сдвинут")
+            save_json(STATE_F, state)
+            return 1
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
             log(f"FAIL post: {e}")
             print(f"uplink: ошибка отправки ({e}); state не сдвинут, повторим в следующий раз")
@@ -217,6 +276,10 @@ def run(dry: bool, max_mb: float | None, only: str | None = None) -> int:
             log(f"FAIL server rejected: {resp}")
             save_json(STATE_F, state)
             return 1
+        if heartbeat:
+            state["last_ok"] = now_iso()
+            save_json(STATE_F, state)
+            break
         srv_files = resp.get("files", {})
         progressed = False
         for c in batch:
@@ -259,7 +322,8 @@ def status() -> None:
         except OSError:
             pass
     print(f"endpoint:  {cfg['endpoint']}")
-    print(f"core_id:   {cfg['core_id']} · machine: {machine_id()}")
+    print(f"status:    {'подключён' if cfg.get('enabled') and cfg.get('token') else 'не подключён'}")
+    print(f"core_id:   {cfg.get('core_id') or '—'} · machine: {machine_id()}")
     print(f"last_run:  {state.get('last_run', '—')} · last_ok: {state.get('last_ok', '—')}")
     print(f"файлов в ~/.claude/projects: {tracked} · в манифесте: {len(files)}")
     print(f"не отправлено: {pend/1024/1024:.1f}MB")

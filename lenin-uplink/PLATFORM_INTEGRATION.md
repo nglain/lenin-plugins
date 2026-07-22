@@ -8,21 +8,19 @@
 Есть клиентский плагин `lenin-uplink` (публичный, ставится командой
 `/plugin install`). Он ежедневно шлёт новые байты сессионных файлов Claude Code
 (`~/.claude/projects/**/*.jsonl`) на сервер по протоколу `lenin-uplink/1`.
-Сейчас endpoint = локальный мок. Нужно, чтобы **платформа стала реальным
-приёмником** и автоматизировала онбординг: юзер ставит плагин → `/lenin setup` →
-платформа сама создаёт юзера и выписывает токен → синк работает без ручных шагов.
+Платформа является реальным приёмником. Регистрация не создаёт анонимных
+пользователей: личность берётся из авторизованного профиля Lenin.
 
 ## Целевой flow (end-to-end, под ключ)
 
 ```
 1. Юзер: /plugin install lenin-core@lenin + lenin-uplink@lenin
-2. Юзер: /lenin setup   (спрашивает имя + профиль)
-3. Плагин: POST https://lenin.nglain.com/api/uplink/register
-           {owner_name, core_id, machine_id}
-4. Платформа: создаёт user (owner_id), генерит token, возвращает:
-              {owner_id, token, endpoint}
-5. Плагин: пишет token+owner_id+endpoint в ~/.claude/lenin_uplink/config.json
-6. launchd (уже стоит) ежедневно шлёт сессии → POST {endpoint} → платформа принимает
+2. Юзер в профиле Lenin: «Подключить Mac» → подтверждает consent → получает код
+3. Юзер: /uplink register КОД
+4. Плагин: POST /api/uplink/register {code, machine_id}
+5. Платформа одноразово погашает код и возвращает machine-scoped token
+6. Плагин пишет конфиг с chmod 0600
+7. launchd ежедневно шлёт сессии → платформа принимает
 ```
 
 Шаги 3–5 — **новые** (сейчас юзер вписывает token вручную через `/uplink setup`).
@@ -32,32 +30,28 @@
 
 ### Endpoint 1 — `POST /api/uplink/register` (НОВЫЙ, онбординг)
 
-Создаёт юзера + выписывает токен. Вызывается плагином один раз при `/lenin setup`.
+Погашает одноразовый код и выписывает token конкретному Mac.
 
 **Запрос:**
 ```json
 POST https://lenin.nglain.com/api/uplink/register
 Content-Type: application/json
-{ "owner_name": "<имя юзера>",
-  "core_id": "lenin-core",
-  "machine_id": "<LocalHostName>",
-  "profile": "psych|cfo|ops|builder|designer|athlete" }
+{ "code": "lsc_...", "machine_id": "<LocalHostName>" }
 ```
 
 **Ответ 200:**
 ```json
-{ "owner_id": "<платформенный id, напр. usr_abc123>",
-  "token": "< bearer-токен, long-lived, скоуп = (owner, core) >",
-  "endpoint": "https://lenin.nglain.com/v1/uplink/sessions" }
+{ "owner_id": "<id авторизованного пользователя>",
+  "core_id": "<machine-scoped id>", "machine_id": "<LocalHostName>",
+  "token": "<bearer-token>", "sessions_endpoint": "/v1/uplink/sessions",
+  "protocol": "lenin-uplink/1" }
 ```
 
 Логика:
-- `owner_name` → человекочитаемое, не id. Платформа генерит `owner_id` (stable, UUID/slug).
-- Один owner × много machines = один token (машины различаются по `machine_id` в заголовках).
+- Код выпускается только в авторизованном профиле, живёт 10 минут и хранится хэшированным.
+- Каждый Mac получает отдельный token; отзыв одного Mac не ломает остальные.
 - Token хранится хэшированным (как пароль). При потере — перевыпуск через UI платформы.
-- Идемпотентность: повторный register с тем же `owner_name`+`machine_id` → вернуть
-  существующий token (или 409 + инструкция перевыпуска). Решить политику.
-- Rate-limit: жёстко (1 register/мин с IP) — публичный endpoint.
+- Повторное подключение уже активного Mac → 409; сначала отозвать старое подключение.
 
 ### Endpoint 2 — `POST /v1/uplink/sessions` (ПРИЁМ, по контракту)
 
@@ -69,7 +63,7 @@ Authorization: Bearer <token>
 Content-Type: application/json · Content-Encoding: gzip
 X-Uplink-Proto: 1 · X-Owner-Id · X-Core-Id · X-Machine-Id
 
-{ "proto":"lenin-uplink/1", "owner_id", "core_id", "machine_id", "sent_at",
+{ "proto":"lenin-uplink/1", "owner_id", "core_id", "machine_id", "lenin_version", "sent_at",
   "chunks":[ {"path","offset","length","sha256","b64"} ] }
 ```
 

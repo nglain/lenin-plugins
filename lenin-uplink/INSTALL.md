@@ -34,7 +34,7 @@
 ```
 ls ~/.claude/plugins/cache/lenin/lenin-uplink/
 ```
-должна показать версию (`1.0.x`).
+должна показать версию (`1.1.x`).
 
 ---
 
@@ -48,40 +48,20 @@ ls ~/.claude/plugins/cache/lenin/lenin-uplink/
 
 ---
 
-## Шаг 3. Настроить config.json
+## Шаг 3. Подключить Mac
 
-Конфиг: `~/.claude/lenin_uplink/config.json`. После установки он создаётся
-автоматически с дефолтами (мок-эндпоинт). Заменить 4 поля:
-
-```json
-{
-  "enabled": true,
-  "endpoint": "https://your-server.example.com/v1/uplink/sessions",
-  "token": "Bearer-токен-от-вашего-сервера",
-  "owner_id": "your-name",
-  "core_id": "lenin-yours",
-  "max_mb_per_run": 200,
-  "max_chunk_mb": 8,
-  "max_batch_mb": 24
-}
-```
-
-| Поле | Что |
-|---|---|
-| `endpoint` | URL сервера **вместе с путём** `/v1/uplink/sessions` |
-| `token` | Bearer-токен; выдаётся на пару (owner, core) |
-| `owner_id` | человек-владелец ядра |
-| `core_id` | какое ядро (один владелец × несколько машин = один токен) |
-
-**Безопасно вписать токен** (чтобы он не попал в историю сессии Claude,
-которая сама улетает через аплинк):
+1. Выполни `/uplink setup`.
+2. Открой свой профиль на `https://lenin.nglain.com`.
+3. Нажми **«Подключить Mac»** и подтверди передачу истории Claude Code.
+4. Скопируй одноразовый код и выполни:
 
 ```
-! nano ~/.claude/lenin_uplink/config.json
+/uplink register ОДНОРАЗОВЫЙ_КОД
 ```
 
-(или `code`/`vim`). Либо после рестарта — `/uplink setup` спросит значения
-интерактивно.
+Код действует 10 минут и только один раз. Плагин получает отдельный token для
+этого Mac и сохраняет его в `~/.claude/lenin_uplink/config.json` с правами
+`0600`. Token в чат не печатается.
 
 ---
 
@@ -110,7 +90,8 @@ python3 ~/.claude/plugins/cache/lenin/lenin-uplink/*/scripts/session_uplink.py -
 
 ## Шаг 5. Автозапуск (launchd)
 
-Поставить ежедневный будильник + запуск при включении Мака:
+Команда `register` ставит ежедневный будильник автоматически. Повторная ручная
+установка нужна только для ремонта:
 
 ```
 /uplink install
@@ -140,28 +121,17 @@ python3 ~/.claude/plugins/cache/lenin/lenin-uplink/*/scripts/doctor.py
 
 ---
 
-## Переход с мока на реальный сервер
-
-Если ставил с дефолтным мок-эндпоинтом, а теперь есть реальный сервер:
-
-1. Вписать `endpoint` + `token` в config.json (шаг 3).
-2. `rm ~/.claude/lenin_uplink/state.json` — если хочешь, чтобы на новый
-   сервер улетела **вся история** с нуля. Иначе продолжит досылать только
-   новое с текущего offset.
-3. `uplink run` — пошло.
-
----
-
 ## Troubleshooting
 
 | Симптом | Причина / fix |
 |---|---|
 | `/uplink` — «неизвестная команда» | Сессия стартовала до установки. Перезапусти Claude Code (шаг 2). |
 | `LastExitStatus ≠ 0` у launchd | Смотри логи: `cat ~/.claude/lenin_uplink/launchd.err` |
-| «ошибка отправки» в run | endpoint недоступен / токен неверный. `doctor.py` подскажет. Проверь `endpoint` (с `/v1/uplink/sessions` в конце) и `token`. |
+| «ошибка отправки» в run | Сервер недоступен. `doctor.py` подскажет состояние. |
+| «доступ отозван» | Сервер вернул 403, поэтому плагин безопасно выключился. Получи новый код в профиле и повтори `/uplink register КОД`. |
 | launchd-plist указывает на старую версию после обновы | Самопочинка: SessionStart-хук переустановит. Либо вручную `/uplink install`. |
 | Ничего не отправляется, «0 chunk(s)» | Всё уже синхронизировано (offset = размер). Проверь `/uplink status` — «не отправлено: 0MB». |
-| Токен утёк в историю сессии | Вписывал через чат, а не через `! nano…`. Ротируй токен на сервере, впиши заново через редактор. |
+| Код просрочен | Получи новый в профиле: старый живёт 10 минут и одноразовый. |
 | Хочу выключить | `enabled: false` в config.json (всё стопается), либо `/plugin uninstall lenin-uplink@lenin`. |
 
 Логи: `~/.claude/lenin_uplink/uplink.log` (каждый прогон), `launchd.log`/`launchd.err`.

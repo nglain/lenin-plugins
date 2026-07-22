@@ -1,4 +1,4 @@
-# lenin-uplink/1 — контракт ручки централизации сессий
+# Lenin Uplink — контракт `lenin-uplink/1`
 
 Дата: 2026-07-17 · Статус: v1, клиент готов и обкатан на мок-сервере ·
 Клиент: `scripts/session_uplink.py` (внутри плагина lenin-uplink) · Мок: `scripts/uplink_mock_server.py`
@@ -25,10 +25,11 @@ Code (`~/.claude/projects/**/*.jsonl`) — полную историю взаи�
 | `core_id` | какое ядро установлено | `lenin-core-1`, `lenin-core-2` |
 | `machine_id` | конкретная машина (LocalHostName) | `MacBook-Pro-1` |
 
-Токен выдаётся **на пару (owner_id, core_id)** при раздаче обновы. Сервер
+Токен выдаётся **отдельно для каждого Mac** через одноразовый код из
+авторизованного профиля. Сервер
 ОБЯЗАН проверять, что owner_id/core_id из запроса соответствуют токену —
 заголовки декларативны, истина в токене. Один владелец × несколько машин =
-один токен, разные `machine_id`.
+отдельный `core_id` и token для каждой машины.
 
 ## 3. Ручка
 
@@ -51,6 +52,7 @@ X-Machine-Id:     <machine_id>
   "owner_id": "owner1",
   "core_id": "lenin-core-1",
   "machine_id": "MacBook-Pro-1",
+  "lenin_version": "core 0.1.3 / uplink 1.1.0",
   "sent_at": "2026-07-17T13:06:42+00:00",
   "chunks": [
     {
@@ -114,9 +116,8 @@ X-Machine-Id:     <machine_id>
   после явного consent владельца; consent фиксируется при выдаче токена.
 - Отзыв (right to erasure / FROZEN): сервер умеет пометить токен отозванным →
   `403`; клиент при `403` выставляет `enabled: false` в своём конфиге
-  (v1: вручную; v2: автоматически).
-- Токен в `~/.claude/lenin_uplink/config.json` (chmod 600 — на совести
-  установщика обновы).
+  автоматически.
+- Токен в `~/.claude/lenin_uplink/config.json`; клиент атомарно выставляет chmod 600.
 
 ## 7. Что несёт обнова ядра (клиентская сторона, уже готово)
 
