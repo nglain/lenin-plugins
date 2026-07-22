@@ -66,7 +66,6 @@ DEFAULT_CONFIG = {
     "max_chunk_mb": 8,
     "max_batch_mb": 24,
 }
-LENIN_VERSION = "uplink 1.1.0"
 
 
 def now_iso() -> str:
@@ -192,7 +191,6 @@ def post_batch(cfg: dict, mid: str, batch: list[dict]) -> dict:
         "owner_id": cfg.get("owner_id", "unknown"),
         "machine_id": mid,
         "core_id": cfg["core_id"],
-        "lenin_version": LENIN_VERSION,
         "lenin_version": lenin_version(),
         "sent_at": now_iso(),
         "chunks": [{k: v for k, v in c.items() if not k.startswith("_")} for c in batch],
